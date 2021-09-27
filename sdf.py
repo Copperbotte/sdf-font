@@ -33,10 +33,102 @@ def create_coordinate_image(x, y, res_power=8):
         return img
 
 def create_sdf(img):
-    sdf = img.clone()
 
+    #"""
+    # leave wand's api for performance
     t = time.time()
-    #find a list of all the font and background points
+    sdf = np.array(img)
+    print("img clone took %.4f seconds"%(time.time() - t))
+
+    # simplify sdf to a single bit
+    t = time.time()
+    sdf = np.min(sdf, axis=2)
+    sdf = sdf // 255
+    sdf = sdf.astype(np.int8)
+    print("sdf simplify took %.4f seconds"%(time.time() - t))
+
+    # find boundary locations
+    t = time.time()
+    delta = np.zeros(sdf.shape, dtype=np.int8)
+
+    #     vertical differences
+    vdelta = np.abs(sdf[:-1, :] - sdf[1:, :])
+    delta[:-1, :] += vdelta
+    delta[1:, :] += vdelta
+
+    #     horizontal differences
+    hdelta = np.abs(sdf[:, :-1] - sdf[:, 1:])
+    delta[:, :-1] += hdelta
+    delta[:, 1:] += hdelta
+
+    #     convert to binary
+    delta = np.where(0 < delta, True, False)
+
+    #     generate coordinates
+    ind = np.indices(sdf.shape).T
+
+    #     cull coordinates and sdf to find deltas
+    c_ind = ind[delta]
+    c_sdf = sdf[delta]
+
+    #     sort sdf into font and background
+    font_sites = c_ind[c_sdf == 0]
+    back_sites = c_ind[c_sdf != 0]
+    print("boundary search took %.4f seconds"%(time.time() - t))
+
+    
+    # Wouldn't a voronoi diagram work better for this?
+    # find the closest boundary of opposite color for each point
+    # for each boundary point, generate an sdf toward it
+    t = time.time()
+    sdf_bg = np.full(sdf.shape, img.width*img.width)
+    for pt in font_sites:
+        sdf_pt = ind - pt
+        sdf_pt = np.sum(sdf_pt*sdf_pt, axis=2)
+        sdf_bg = np.where(sdf_pt < sdf_bg, sdf_pt, sdf_bg)
+    print("background sdf generation took %.4f seconds"%(time.time() - t))
+    
+    t = time.time()
+    sdf_fo = np.full(sdf.shape, img.width*img.width)
+    for pt in back_sites:
+        sdf_pt = ind - pt
+        sdf_pt = np.sum(sdf_pt*sdf_pt, axis=2)
+        sdf_fo = np.where(sdf_pt < sdf_fo, sdf_pt, sdf_fo)
+    print("font sdf generation took %.4f seconds"%(time.time() - t))
+
+    # Replace sdf on sdf_bg with sdf_fo, if the point is on the font
+    t = time.time()
+    sdf_bg = np.where(sdf == 0, sdf_bg, sdf_fo)
+    print("sdf merge took %.4f seconds"%(time.time() - t))
+
+    # Convert from square distance to distance
+    t = time.time()
+    sdf_bg = np.sqrt(sdf_bg)
+
+    # Re-scale, Clip, and Correct internal sign
+    sdf_bg = sdf_bg / img.width
+    sdf_bg = np.where(sdf_bg < 1, sdf_bg, 1)
+    sdf_bg = np.where(sdf == 0, -sdf_bg, sdf_bg)
+
+    # Lerp into int8
+    sdf_bg = 255 * (sdf_bg/2.0 + 0.5)
+    sdf = sdf_bg.astype(np.int8)
+    #sdf = sdf + 10
+    #sdf = sdf / 255 + 0.1
+    print("conversion to sdf took %.4f seconds"%(time.time() - t))
+
+    sdf = Image.from_array(sdf)
+    globals().update(locals())
+    return sdf
+
+    return img
+    
+    #"""
+
+    sdf = img.clone()
+    
+    t = time.time()
+    # find a list of all the font and background points
     black = Color('black')
     pts_font = []
     pts_bg = []
@@ -105,7 +197,7 @@ def create_sdf(img):
     return sdf
 
 def hello_sdf():
-    res_power = 6
+    res_power = 9
     width = 2**res_power
 
     fig = plt.gcf()
